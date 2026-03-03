@@ -1290,8 +1290,55 @@ class AiterAttnBackend(AttentionBackend):
                 kv_indices,
                 self.req_to_token.stride(0),
             )
-            if not self.use_mla:
-                # Non-MLA: update custom_mask and mask_indptr for triton extend kernel
+
+            if self.use_mla:
+                kv_last_page_len = self.cuda_graph_kv_last_page_len[:bs]
+                max_q_len = self.num_draft_tokens
+
+                if _use_mla_ps_kernel:
+
+                    num_kv_splits = self.max_split_per_batch
+
+                    self.make_mla_meta_data(
+                        qo_indptr,
+                        kv_indptr,
+                        kv_last_page_len,
+                        self.work_metadata,
+                        self.work_info_set,
+                        self.work_indptr,
+                        self.reduce_indptr,
+                        self.reduce_final_map,
+                        self.reduce_partial_map,
+                        max_q_len,
+                        fast_mode=fast_mode,
+                        max_split_per_batch=num_kv_splits,
+                        intra_batch_mode=intra_batch_mode,
+                    )
+
+                    work_metadata = self.work_metadata
+                    work_info_set = self.work_info_set
+                    work_indptr = self.work_indptr
+
+                    reduce_indptr = self.reduce_indptr
+                    reduce_final_map = self.reduce_final_map
+                    reduce_partial_map = self.reduce_partial_map
+
+                self.forward_metadata = ForwardMetadata(
+                    kv_indptr,
+                    kv_indices,
+                    qo_indptr,
+                    kv_last_page_len,
+                    max_q_len,
+                    kv_indptr[-1].item(),
+                    work_metadata=work_metadata,
+                    work_info_set=work_info_set,
+                    work_indptr=work_indptr,
+                    reduce_indptr=reduce_indptr,
+                    reduce_final_map=reduce_final_map,
+                    reduce_partial_map=reduce_partial_map,
+                    num_kv_splits=num_kv_splits,
+                )
+            else:
                 custom_mask = self.cuda_graph_custom_mask
                 custom_mask[: spec_info.custom_mask.shape[0]] = spec_info.custom_mask
                 seq_mask_len = self.num_draft_tokens * (
@@ -1300,54 +1347,17 @@ class AiterAttnBackend(AttentionBackend):
                 mask_indptr = self.mask_indptr[: bs + 1]
                 mask_indptr[1 : bs + 1] = torch.cumsum(seq_mask_len, dim=0)
 
-            kv_last_page_len = self.cuda_graph_kv_last_page_len[:bs]
-            max_q_len = self.num_draft_tokens
-
-            # if self.kv_cache_dtype == fp8_dtype:
-            if _use_mla_ps_kernel:
-
-                num_kv_splits = self.max_split_per_batch
-
-                self.make_mla_meta_data(
-                    qo_indptr,
+                self.forward_metadata = ForwardMetadata(
                     kv_indptr,
-                    kv_last_page_len,
-                    self.work_metadata,
-                    self.work_info_set,
-                    self.work_indptr,
-                    self.reduce_indptr,
-                    self.reduce_final_map,
-                    self.reduce_partial_map,
-                    max_q_len,
-                    fast_mode=fast_mode,
-                    max_split_per_batch=num_kv_splits,
-                    intra_batch_mode=intra_batch_mode,
+                    kv_indices,
+                    qo_indptr,
+                    None,
+                    self.num_draft_tokens,
+                    None,
+                    custom_mask=custom_mask,
+                    mask_indptr=mask_indptr,
+                    max_extend_len=self.num_draft_tokens,
                 )
-
-                work_metadata = self.work_metadata
-                work_info_set = self.work_info_set
-                work_indptr = self.work_indptr
-
-                reduce_indptr = self.reduce_indptr
-                reduce_final_map = self.reduce_final_map
-                reduce_partial_map = self.reduce_partial_map
-
-            self.forward_metadata = ForwardMetadata(
-                kv_indptr,
-                kv_indices,
-                qo_indptr,
-                kv_last_page_len,
-                max_q_len,
-                kv_indptr[-1].item(),
-                work_metadata=work_metadata,
-                work_info_set=work_info_set,
-                work_indptr=work_indptr,
-                reduce_indptr=reduce_indptr,
-                reduce_final_map=reduce_final_map,
-                reduce_partial_map=reduce_partial_map,
-                num_kv_splits=num_kv_splits,
-                # num_kv_splits_indptr=num_kv_splits_indptr,
-            )
 
         elif forward_mode.is_draft_extend():
             num_tokens_per_bs = self.speculative_num_steps + 1
@@ -1368,53 +1378,65 @@ class AiterAttnBackend(AttentionBackend):
                 self.req_to_token.stride(0),
             )
 
-            kv_last_page_len = self.cuda_graph_kv_last_page_len[:bs]
-            max_q_len = num_tokens_per_bs
+            if self.use_mla:
+                kv_last_page_len = self.cuda_graph_kv_last_page_len[:bs]
+                max_q_len = num_tokens_per_bs
 
-            if _use_mla_ps_kernel:
+                if _use_mla_ps_kernel:
 
-                num_kv_splits = self.max_split_per_batch
+                    num_kv_splits = self.max_split_per_batch
 
-                self.make_mla_meta_data(
-                    qo_indptr,
+                    self.make_mla_meta_data(
+                        qo_indptr,
+                        kv_indptr,
+                        kv_last_page_len,
+                        self.work_metadata,
+                        self.work_info_set,
+                        self.work_indptr,
+                        self.reduce_indptr,
+                        self.reduce_final_map,
+                        self.reduce_partial_map,
+                        max_q_len,
+                        fast_mode=fast_mode,
+                        max_split_per_batch=num_kv_splits,
+                        intra_batch_mode=intra_batch_mode,
+                    )
+
+                    work_metadata = self.work_metadata
+                    work_info_set = self.work_info_set
+                    work_indptr = self.work_indptr
+
+                    reduce_indptr = self.reduce_indptr
+                    reduce_final_map = self.reduce_final_map
+                    reduce_partial_map = self.reduce_partial_map
+
+                self.forward_metadata = ForwardMetadata(
                     kv_indptr,
+                    kv_indices,
+                    qo_indptr,
                     kv_last_page_len,
-                    self.work_metadata,
-                    self.work_info_set,
-                    self.work_indptr,
-                    self.reduce_indptr,
-                    self.reduce_final_map,
-                    self.reduce_partial_map,
                     max_q_len,
-                    fast_mode=fast_mode,
-                    max_split_per_batch=num_kv_splits,
-                    intra_batch_mode=intra_batch_mode,
+                    kv_indptr[-1].item(),
+                    work_metadata=work_metadata,
+                    work_info_set=work_info_set,
+                    work_indptr=work_indptr,
+                    reduce_indptr=reduce_indptr,
+                    reduce_final_map=reduce_final_map,
+                    reduce_partial_map=reduce_partial_map,
+                    num_kv_splits=num_kv_splits,
                 )
-
-                work_metadata = self.work_metadata
-                work_info_set = self.work_info_set
-                work_indptr = self.work_indptr
-
-                reduce_indptr = self.reduce_indptr
-                reduce_final_map = self.reduce_final_map
-                reduce_partial_map = self.reduce_partial_map
-
-            self.forward_metadata = ForwardMetadata(
-                kv_indptr,
-                kv_indices,
-                qo_indptr,
-                kv_last_page_len,
-                max_q_len,
-                kv_indptr[-1].item(),
-                work_metadata=work_metadata,
-                work_info_set=work_info_set,
-                work_indptr=work_indptr,
-                reduce_indptr=reduce_indptr,
-                reduce_final_map=reduce_final_map,
-                reduce_partial_map=reduce_partial_map,
-                num_kv_splits=num_kv_splits,
-                # num_kv_splits_indptr=num_kv_splits_indptr,
-            )
+            else:
+                self.forward_metadata = ForwardMetadata(
+                    kv_indptr,
+                    kv_indices,
+                    qo_indptr,
+                    None,
+                    num_tokens_per_bs,
+                    None,
+                    custom_mask=None,
+                    mask_indptr=None,
+                    max_extend_len=num_tokens_per_bs,
+                )
 
         else:
             raise ValueError("Invalid forward mode")
